@@ -1,4 +1,3 @@
-# ...existing code...
 import os, html, sys, shutil, subprocess
 from pdf2image import convert_from_path, pdfinfo_from_path, exceptions as pdf2image_exceptions
 from PIL import Image
@@ -15,10 +14,215 @@ pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tessera
 DPI = 200
 LANGS = "ara+eng"   # تأكد أن 'ara' مثبتة في tesseract
 MIN_CONF = 30
-# مؤقت: نطاق الصفحات الذي نطبّق عليه التحسينات أو ننفّذ التحويل (بافتراض 1-10 للتجربة)
-PROCESS_START = 1
-PROCESS_END = 10
-# ...existing code...
+# تمكين/تعطيل كشف الجداول (إذا كانت نتيجة كشف الجداول مزعجة اضبطها إلى False)
+ENABLE_TABLE_DETECTION = False
+
+def convert_pdf_to_html(pdf_path, out_dir, poppler_path=None, tesseract_cmd=None,
+                        dpi=200, langs="ara+eng", min_conf=30, enable_table_detection=False,
+                        process_start=1, process_end=None):
+    print(f"[convert_pdf_to_html] process_start={process_start}, process_end={process_end}")
+    """
+    تحويل صفحات PDF إلى HTML في مجلد out_dir.
+    pdf_path: مسار ملف PDF
+    out_dir: مجلد الإخراج
+    poppler_path: مسار poppler (أو None)
+    tesseract_cmd: مسار tesseract (أو None)
+    dpi: دقة التحويل
+    langs: لغات OCR
+    min_conf: الحد الأدنى للثقة
+    enable_table_detection: كشف الجداول
+    process_start: أول صفحة
+    process_end: آخر صفحة (أو None)
+    """
+    import shutil
+    from pdf2image import convert_from_path, pdfinfo_from_path
+    import os
+    import html
+    import pytesseract
+    from pytesseract import Output
+    import cv2
+    import numpy as np
+
+    pytesseract.pytesseract.tesseract_cmd = tesseract_cmd or pytesseract.pytesseract.tesseract_cmd
+    def resolve_poppler_path(provided):
+        if provided and os.path.isdir(provided) and os.path.exists(os.path.join(provided, "pdfinfo.exe")):
+            return provided
+        exe = shutil.which("pdfinfo")
+        if exe:
+            return os.path.dirname(exe)
+        return None
+    poppler_resolved = resolve_poppler_path(poppler_path)
+    if not poppler_resolved:
+        raise RuntimeError("لم أجد Poppler (pdfinfo). حدّث poppler_path أو أضف pdfinfo للـ PATH.")
+    os.makedirs(out_dir, exist_ok=True)
+    img_dir = os.path.join(out_dir, "images")
+    os.makedirs(img_dir, exist_ok=True)
+    info = pdfinfo_from_path(pdf_path, userpw=None, poppler_path=poppler_resolved)
+    total_pages = int(info.get("Pages", 0))
+    if total_pages == 0:
+        raise RuntimeError("لم أتمكن من قراءة عدد الصفحات من الملف.")
+    end_p = process_end or total_pages
+    for p in range(1, total_pages + 1):
+        if p < process_start or p > end_p:
+            continue
+        print(f"[تحويل] الصفحة {p} (من {process_start} إلى {end_p})")
+        imgs = convert_from_path(pdf_path, dpi=dpi, first_page=p, last_page=p, poppler_path=poppler_resolved)
+        if not imgs:
+            continue
+        pil_img = imgs[0]
+        img_name = f"page-{p}.png"
+        img_path = os.path.join(img_dir, img_name)
+        pil_img.save(img_path, format="PNG")
+        w, h = pil_img.size
+        proc_img = preprocess_for_ocr(pil_img)
+        config = r'--oem 1 --psm 6'
+        data = pytesseract.image_to_data(proc_img, lang=langs, config=config, output_type=Output.DICT)
+        spans = []
+        page_lines = []
+        n = len(data.get('level', []))
+        any_text = False
+        text_boxes = []
+        lines = {}
+        for i in range(n):
+            text = (data['text'][i] or "").strip()
+            conf_raw = data['conf'][i]
+            try:
+                conf = int(float(conf_raw))
+            except:
+                conf = -1
+            if not text or conf < min_conf:
+                continue
+            any_text = True
+            left = int(data['left'][i])
+            top = int(data['top'][i])
+            width = int(data['width'][i])
+            height = int(data['height'][i])
+            text_boxes.append((left, top, width, height))
+            safe = html.escape(text)
+            block = data.get('block_num', [None]*n)[i]
+            par = data.get('par_num', [None]*n)[i]
+            line = data.get('line_num', [None]*n)[i]
+            key = (block, par, line)
+            lines.setdefault(key, []).append({'text': safe, 'l': left, 't': top, 'w': width, 'h': height})
+        for key, items in lines.items():
+            top = min(it['t'] for it in items)
+            line_h = max(it['h'] for it in items)
+            font_size = max(10, int(line_h * 0.8))
+            base_left = min(it['l'] for it in items)
+            max_right = max(it['l'] + it['w'] for it in items)
+            line_width = max(1, int(max_right - base_left))
+            is_rtl = 'ara' in langs.lower() or 'arab' in langs.lower()
+            ordered = sorted(items, key=lambda it: it['l'], reverse=is_rtl)
+            inner_parts = []
+            punct_chars = set('.,،;:!?؟)]}›»"\'')
+            for idx, it in enumerate(ordered):
+                rel_left = int(it['l'] - base_left)
+                span_style = (
+                    f"position:absolute; left:{rel_left}px; top:0px; width:{it['w']}px; height:{line_h}px; "
+                    "white-space:nowrap; overflow:visible; display:inline-block; "
+                    "user-select:text; -webkit-user-select:text; -moz-user-select:text; "
+                    "pointer-events:auto;"
+                )
+                content = it['text']
+                first_ch = content.lstrip()[:1]
+                if idx > 0 and first_ch and first_ch not in punct_chars:
+                    content = '&nbsp;' + content
+                inner_parts.append(f'<span style="{span_style}">{content}</span>')
+            inner = ''.join(inner_parts)
+            container_style = (
+                f"position:absolute; left:{base_left}px; top:{top}px; width:{line_width}px; height:{line_h}px; "
+                f"font-size:{font_size}px; line-height:{line_h}px; overflow:visible; "
+                "font-family: 'Noto Naskh Arabic', 'Arial', sans-serif; direction:rtl; unicode-bidi:plaintext; "
+                "color:#000; -webkit-text-fill-color:#000; text-shadow:none; "
+                "user-select:text; -webkit-user-select:text; -moz-user-select:text; cursor:text; "
+                "z-index:2; pointer-events:auto;"
+            )
+            spans.append(f'<div style="{container_style}">{inner}</div>')
+            line_text = ' '.join([it['text'].replace('&nbsp;', ' ') for it in ordered])
+            page_lines.append({'top': top, 'line_h': line_h, 'base_left': base_left, 'line_width': line_width, 'font_size': font_size, 'text': html.unescape(line_text)})
+        overlays = []
+        def detect_chapter_start(lines_meta, page_w, page_h, keywords=None):
+            """
+            كشف بداية فصل/باب بناءً على الكلمات المفتاحية أو حجم الخط والتموضع.
+            """
+            if keywords is None:
+                keywords = CHAPTER_KEYWORDS
+            best = None
+            for lm in lines_meta:
+                txt = lm['text'].strip().lower()
+                # تحقق من وجود كلمة مفتاحية في بداية أو وسط السطر
+                for kw in keywords:
+                    if kw in txt:
+                        return True, lm['text']
+                # شرط عنوان كبير ومتوسط التمركز أعلى الصفحة
+                if lm['font_size'] >= max(28, int(page_h * 0.025)) and lm['top'] < page_h * 0.40:
+                    center_x = lm['base_left'] + lm['line_width'] / 2
+                    if abs(center_x - page_w / 2) < page_w * 0.25:
+                        return True, lm['text']
+                if best is None or lm['font_size'] > best['font_size']:
+                    best = lm
+            # كحالة أخيرة: إذا كان أكبر سطر في أعلى 40% من الصفحة وبحجم كبير نسبياً
+            if best and best['top'] < page_h * 0.40 and best['font_size'] > max(28, int(page_h * 0.025)):
+                return True, best['text']
+            return False, ''
+        try:
+            if enable_table_detection:
+                table_regions = detect_table_regions(proc_img)
+                filtered = []
+                for (x2, y2, w2, h2) in table_regions:
+                    if y2 < int(h * 0.06):
+                        continue
+                    if w2 * h2 < 2000:
+                        continue
+                    filtered.append((x2, y2, w2, h2))
+                table_regions = filtered
+            else:
+                table_regions = []
+            for ridx, tb in enumerate(table_regions):
+                thtml = extract_table_html_from_region(pil_img, tb, lang=langs)
+                if thtml:
+                    overlays.append(thtml.replace('style="', 'style="z-index:3; pointer-events:none; '))
+        except Exception:
+            pass
+        try:
+            # كشف بداية فصل/باب إذا وُجد
+            try:
+                is_chap, chap_title = detect_chapter_start(page_lines, w, h)
+                if is_chap:
+                    badge_style = (
+                        'position:absolute; right:18px; top:18px; '
+                        'background:#fff8b0; color:#222; padding:8px 18px; '
+                        'z-index:10; border-radius:6px; font-size:18px; font-weight:bold; box-shadow:0 1px 6px #ccc;'
+                    )
+                    overlays.append(f'<div style="{badge_style}">بداية فصل: {html.escape(chap_title)}</div>')
+            except Exception:
+                pass
+        except Exception:
+            pass
+        try:
+            nontext = find_nontext_regions(proc_img, text_boxes, min_area=1500)
+            for idx, (x,y,w2,h2) in enumerate(nontext):
+                page_area = w * h
+                region_area = w2 * h2
+                if region_area > page_area * 0.90:
+                    continue
+                if y < int(h * 0.04) and region_area < page_area * 0.25:
+                    continue
+                crop = pil_img.crop((x, y, x+w2, y+h2))
+                fig_name = f'figure-p{p}-{idx}.png'
+                fig_path = os.path.join(img_dir, fig_name)
+                crop.save(fig_path, format='PNG')
+                style = f'position:absolute; left:{x}px; top:{y}px; width:{w2}px; height:{h2}px; z-index:3; pointer-events:none;'
+                overlays.append(f'<img src="images/{fig_name}" style="{style}">')
+        except Exception:
+            pass
+        img_opacity = 0.0 if any_text else 1.0
+        img_tag = f'<img src="images/{img_name}" style="position:absolute; left:0; top:0; width:{w}px; height:{h}px; opacity:{img_opacity}; z-index:1; pointer-events:none;">'
+        html_content = f"""<!doctype html>\n<html lang=\"ar\">\n<head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>صفحة {p}</title></head>\n<body style=\"margin:0;padding:0;\">\n<div style=\"position:relative; width:{w}px; height:{h}px;\">\n{img_tag}\n{''.join(overlays)}\n{''.join(spans)}\n</div>\n</body>\n</html>"""
+        out_html = os.path.join(out_dir, f"page-{p}.html")
+        with open(out_html, "w", encoding="utf-8") as f:
+            f.write(html_content)
+    return out_dir
 
 def check_tesseract_has_lang(lang_code):
     try:
@@ -167,188 +371,3 @@ def extract_table_html_from_region(pil_page, region_bbox, lang=LANGS):
     style = f'position:absolute; left:{x0}px; top:{y0}px; width:{w0}px; height:{h0}px; overflow:auto;'
     return f'<div style="{style}">{table_html}</div>'
 
-def resolve_poppler_path(provided):
-    if provided and os.path.isdir(provided) and os.path.exists(os.path.join(provided, "pdfinfo.exe")):
-        return provided
-    exe = shutil.which("pdfinfo")
-    if exe:
-        return os.path.dirname(exe)
-    return None
-
-POPPLER_PATH = resolve_poppler_path(POPPLER_PATH)
-if not POPPLER_PATH:
-    print("لم أجد Poppler (pdfinfo). ثبّت Poppler وأضف مسار الـ bin للـ PATH أو حدّث POPPLER_PATH في الملف.")
-    sys.exit(1)
-
-os.makedirs(OUT_DIR, exist_ok=True)
-IMG_DIR = os.path.join(OUT_DIR, "images")
-os.makedirs(IMG_DIR, exist_ok=True)
-# ...existing code...
-
-# ====== احصل على عدد الصفحات ======
-info = pdfinfo_from_path(PDF_PATH, userpw=None, poppler_path=POPPLER_PATH)
-total_pages = int(info.get("Pages", 0))
-if total_pages == 0:
-    print("لم أتمكن من قراءة عدد الصفحات."); sys.exit(1)
-
-print(f"عدد الصفحات: {total_pages}")
-
-# ====== معالجة كل صفحة على حدة لتفادي استهلاك الذاكرة ======
-for p in range(1, total_pages + 1):
-    print(f"معالجة صفحة {p}/{total_pages}...")
-    # نفّذ فقط على نطاق الصفحات المحدد حالياً للتجربة
-    if p < PROCESS_START or p > PROCESS_END:
-        print(f"تخطي صفحة {p} (خارج النطاق {PROCESS_START}-{PROCESS_END})")
-        continue
-    try:
-        imgs = convert_from_path(PDF_PATH, dpi=DPI, first_page=p, last_page=p, poppler_path=POPPLER_PATH)
-        if not imgs:
-            print(f"تعذر تحويل الصفحة {p}")
-            continue
-        pil_img = imgs[0]
-        img_name = f"page-{p}.png"
-        img_path = os.path.join(IMG_DIR, img_name)
-        pil_img.save(img_path, format="PNG")
-
-        w, h = pil_img.size
-
-        proc_img = preprocess_for_ocr(pil_img)
-
-        # استخدم psm مناسب (6 أو 3) و oem 1 أو 3 حسب التثبيت
-        config = r'--oem 1 --psm 6'
-        data = pytesseract.image_to_data(proc_img, lang=LANGS, config=config, output_type=Output.DICT)
-
-        spans = []
-        n = len(data.get('level', []))
-        any_text = False
-        text_boxes = []
-        # Group words by (block,par,line) to create a single selectable line element
-        lines = {}
-        for i in range(n):
-            text = (data['text'][i] or "").strip()
-            conf_raw = data['conf'][i]
-            try:
-                conf = int(float(conf_raw))
-            except:
-                conf = -1
-            if not text or conf < MIN_CONF:
-                continue
-            any_text = True
-            left = int(data['left'][i])
-            top = int(data['top'][i])
-            width = int(data['width'][i])
-            height = int(data['height'][i])
-            text_boxes.append((left, top, width, height))
-            safe = html.escape(text)
-            block = data.get('block_num', [None]*n)[i]
-            par = data.get('par_num', [None]*n)[i]
-            line = data.get('line_num', [None]*n)[i]
-            key = (block, par, line)
-            lines.setdefault(key, []).append({'text': safe, 'l': left, 't': top, 'w': width, 'h': height})
-
-        # Build one absolute div per line; inside, absolutely-positioned spans sized to OCR bbox
-        for key, items in lines.items():
-            # compute bounding extents for container
-            top = min(it['t'] for it in items)
-            line_h = max(it['h'] for it in items)
-            font_size = max(10, int(line_h * 0.8))
-            base_left = min(it['l'] for it in items)
-            max_right = max(it['l'] + it['w'] for it in items)
-            line_width = max(1, int(max_right - base_left))
-
-            # For correct text selection in RTL languages, emit DOM in visual order
-            is_rtl = 'ara' in LANGS.lower() or 'arab' in LANGS.lower()
-            ordered = sorted(items, key=lambda it: it['l'], reverse=is_rtl)
-
-            inner_parts = []
-            punct_chars = set('.,،;:!?؟)]}›»\"\'')
-            for idx, it in enumerate(ordered):
-                rel_left = int(it['l'] - base_left)
-                # ensure span covers the full OCR bbox so hit-area matches image
-                span_style = (
-                    f"position:absolute; left:{rel_left}px; top:0px; width:{it['w']}px; height:{line_h}px; "
-                    "white-space:nowrap; overflow:visible; display:inline-block; "
-                    "user-select:text; -webkit-user-select:text; -moz-user-select:text; "
-                    "pointer-events:auto;"
-                )
-                content = it['text']
-                # add a preserved space before words except when the token starts with punctuation
-                first_ch = content.lstrip()[:1]
-                if idx > 0 and first_ch and first_ch not in punct_chars:
-                    content = '&nbsp;' + content
-                inner_parts.append(f'<span style="{span_style}">{content}</span>')
-
-            inner = ''.join(inner_parts)
-
-            # container is positioned where the line appears; allow selection and set RTL dir
-            container_style = (
-                f"position:absolute; left:{base_left}px; top:{top}px; width:{line_width}px; height:{line_h}px; "
-                f"font-size:{font_size}px; line-height:{line_h}px; overflow:visible; "
-                "font-family: 'Noto Naskh Arabic', 'Arial', sans-serif; direction:rtl; unicode-bidi:plaintext; "
-                "color:#000; -webkit-text-fill-color:#000; text-shadow:none; "
-                "user-select:text; -webkit-user-select:text; -moz-user-select:text; cursor:text; "
-                "z-index:2; pointer-events:auto;"
-            )
-            spans.append(f'<div style="{container_style}">{inner}</div>')
-
-        if not any_text:
-            print(f"تحذير: لم يتعرف OCR على نص واضح في الصفحة {p}. جرّب رفع DPI أو تعديل MIN_CONF أو معاينة الصورة المعالجة.")
-            # لحفظ صورة المعالجة لتفقدها يدوياً
-            cv2.imwrite(os.path.join(IMG_DIR, f"proc-{p}.png"), proc_img)
-
-        # اكتشاف الجداول ضمن الصورة المعالجة
-        overlays = []
-        try:
-            table_regions = detect_table_regions(proc_img)
-            for ridx, tb in enumerate(table_regions):
-                thtml = extract_table_html_from_region(pil_img, tb, lang=LANGS)
-                if thtml:
-                    # ensure tables overlay above text but do not block selection (non-interactive)
-                    overlays.append(thtml.replace('style="', 'style="z-index:3; pointer-events:none; '))
-        except Exception:
-            pass
-
-        # اكتشاف صور غير نصية (رسومات، صور) وحفظها
-        try:
-            nontext = find_nontext_regions(proc_img, text_boxes, min_area=1500)
-            for idx, (x,y,w2,h2) in enumerate(nontext):
-                crop = pil_img.crop((x, y, x+w2, y+h2))
-                fig_name = f'figure-p{p}-{idx}.png'
-                fig_path = os.path.join(IMG_DIR, fig_name)
-                crop.save(fig_path, format='PNG')
-                # Make overlay images non-interactive so they don't block text selection
-                style = f'position:absolute; left:{x}px; top:{y}px; width:{w2}px; height:{h2}px; z-index:3; pointer-events:none;'
-                overlays.append(f'<img src="images/{fig_name}" style="{style}">')
-        except Exception:
-            pass
-
-        # إذا تم استخراج نص واضح، نمنع تضمين صورة الخلفية لتفادي ظهور النص مرتين
-        include_bg_image = True
-        if any_text:
-            include_bg_image = False
-
-        # background image is faded when OCR text exists and does not block selection
-        img_opacity = 0.18 if any_text else 1.0
-        img_tag = f'<img src="images/{img_name}" style="position:absolute; left:0; top:0; width:{w}px; height:{h}px; opacity:{img_opacity}; z-index:1; pointer-events:none;">'
-
-        html_content = f"""<!doctype html>
-    <html lang="ar">
-    <head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>صفحة {p}</title></head>
-    <body style="margin:0;padding:0;">
-    <div style="position:relative; width:{w}px; height:{h}px;">
-    {img_tag}
-    {''.join(overlays)}
-    {''.join(spans)}
-    </div>
-    </body>
-    </html>"""
-
-        out_html = os.path.join(OUT_DIR, f"page-{p}.html")
-        with open(out_html, "w", encoding="utf-8") as f:
-            f.write(html_content)
-
-    except Exception as e:
-        print(f"خطأ في الصفحة {p}: {e}")
-
-print("انتهى. النتائج في:", OUT_DIR)
-# ...existing code...

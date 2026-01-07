@@ -1,0 +1,7 @@
+Flask>=2.0
+pdf2image
+pillow
+pytesseract
+opencv-python
+numpy
+werkzeug

@@ -1,0 +1,18 @@
+*{box-sizing:border-box;font-family:Tahoma, Arial, sans-serif}
+body{background:#eef4f7;margin:0;padding:30px;color:#0b2130}
+.container{max-width:1100px;margin:0 auto}
+header{text-align:center;margin-bottom:18px}
+.muted{color:#6b7b84;margin-top:6px}
+.input-card{background:#fff;padding:18px;border-radius:14px;box-shadow:0 6px 18px rgba(8,30,40,0.06);margin-bottom:18px}
+.input-card label{display:block;margin-bottom:8px;font-weight:700}
+#inputText{width:100%;padding:12px;border:1px solid #e6eef2;border-radius:8px;font-size:15px;direction:rtl}
+.controls{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px}
+.controls button{background:#206bff;color:#fff;border:none;padding:10px 14px;border-radius:10px;cursor:pointer;box-shadow:0 6px 12px rgba(32,107,255,0.16)}
+.controls button:hover{opacity:0.95}
+.results{display:grid;grid-template-columns:1fr 1fr;gap:18px;margin-top:12px}
+.card{background:#fff;padding:16px;border-radius:14px;box-shadow:0 6px 18px rgba(8,30,40,0.06)}
+.card.wide{grid-column:1 / -1}
+.card h3{margin:0 0 8px 0}
+.output{min-height:120px;padding:10px;border-radius:10px;background:#fbfeff;border:1px dashed #e6f0f5;color:#0b2130}
+footer{margin-top:16px;text-align:center;color:#55666f}
+@media(max-width:900px){.results{grid-template-columns:1fr}.controls{justify-content:center}}

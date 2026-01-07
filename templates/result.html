@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="ar">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>نتيجة التحويل - {{ book }}</title>
+  <style>body{font-family:Tahoma, Arial, sans-serif;padding:1rem} a{display:block;margin:6px 0}</style>
+</head>
+<body>
+  <h2>النتيجة: {{ book }}</h2>
+  <p>
+    <a href="/download/{{ book }}.zip" style="display:inline-block;padding:8px 18px;background:#ffd700;color:#222;border-radius:6px;font-weight:bold;text-decoration:none;box-shadow:0 1px 4px #ccc;">تنزيل الكتاب كاملاً (zip)</a>
+  </p>
+  <p>قائمة صفحات HTML المولّدة (اضغط لفتح):</p>
+  <ul>
+    {% for f in files %}
+      <li><a href="/converted/{{ book }}/{{ f }}" target="_blank">{{ f }}</a></li>
+    {% endfor %}
+  </ul>
+  <p><a href="/">عودة</a></p>
+</body>
+</html>

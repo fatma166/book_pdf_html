@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="ar">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>محول PDF إلى HTML</title>
+  <style>
+    body{font-family:Tahoma, Arial, sans-serif; padding:2rem;}
+    .card{max-width:700px;margin:0 auto;padding:1.5rem;border:1px solid #ddd;border-radius:8px}
+    input[type=file]{display:block;margin:1rem 0}
+    button{padding:0.6rem 1rem}
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h2>ارفع ملف PDF لتحويله إلى صفحات HTML</h2>
+    {% with messages = get_flashed_messages() %}
+      {% if messages %}
+        <ul>
+        {% for m in messages %}
+          <li style="color:#b00">{{ m }}</li>
+        {% endfor %}
+        </ul>
+      {% endif %}
+    {% endwith %}
+    <form action="/upload" method="post" enctype="multipart/form-data">
+      <label>اختر ملف PDF:</label>
+      <input type="file" name="file" accept="application/pdf">
+      <div style="margin:1rem 0;">
+        <label>من الصفحة:</label>
+        <input type="number" name="page_start" min="1" style="width:80px;" required>
+        <label style="margin-right:1em;">إلى الصفحة:</label>
+        <input type="number" name="page_end" min="1" style="width:80px;" required>
+      </div>
+      <div>
+        <button type="submit">ابدأ التحويل</button>
+      </div>
+    </form>
+    <p style="margin-top:1rem;color:#666">الملفات الناتجة تحفظ في مجلد <strong>converted/&lt;اسم_الكتاب&gt;</strong></p>
+  </div>
+</body>
+</html>

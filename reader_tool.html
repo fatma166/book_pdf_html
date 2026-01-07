@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>مساعد القارئ — أدوات تفاعلية</title>
+  <link rel="stylesheet" href="reader_tool.css">
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>المساعد التعليمي القارئ</h1>
+      <p class="muted">أدخل نصاً من الكتاب أو الصق صفحة، ثم اختر العملية المطلوبة</p>
+    </header>
+
+    <main>
+      <section class="input-card">
+        <label for="inputText">أدخل النص هنا:</label>
+        <textarea id="inputText" placeholder="ألصق فقرة أو صفحة من الكتاب..." rows="8"></textarea>
+
+        <div class="controls">
+          <button onclick="doSimplify()">تبسيط الفقرة</button>
+          <button onclick="doSummarize()">تلخيص في 5 نقاط</button>
+          <button onclick="doCompare()">قارن مفهومين</button>
+          <button onclick="doQuiz()">توليد اختبار (10 أسئلة)</button>
+          <button onclick="doDefinitions()">استخراج التعاريف</button>
+          <button onclick="doConceptMap()">رسم خريطة مفاهيم</button>
+          <button onclick="doReview()">ملخص للمراجعة</button>
+          <button onclick="doExpected()">أسئلة متوقعة</button>
+        </div>
+      </section>
+
+      <section class="results">
+        <div class="card">
+          <h3>الشرح التفصيلي</h3>
+          <div id="explanation" class="output">انتظر إدخال المسألة...</div>
+        </div>
+
+        <div class="card">
+          <h3>الرسم التوضيحي للخطوات</h3>
+          <div id="diagram" class="output">سيظهر الرسم هنا</div>
+        </div>
+
+        <div class="card wide">
+          <h3>نتائج أخرى</h3>
+          <div id="other" class="output"></div>
+        </div>
+      </section>
+    </main>
+
+    <footer>
+      <small> هذه أداة واجهة بدائية — لتحسين الدقة اللغوية، يمكن ربطها لاحقاً بخدمة NLP خارجية.</small>
+    </footer>
+  </div>
+
+  <script src="reader_tool.js"></script>
+</body>
+</html>
