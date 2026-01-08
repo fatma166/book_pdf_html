@@ -1,4 +1,4 @@
-import os, html, sys, shutil, subprocess
+import os, html, sys, shutil, subprocess, argparse
 from pdf2image import convert_from_path, pdfinfo_from_path, exceptions as pdf2image_exceptions
 from PIL import Image
 import pytesseract
@@ -141,28 +141,26 @@ def convert_pdf_to_html(pdf_path, out_dir, poppler_path=None, tesseract_cmd=None
             line_text = ' '.join([it['text'].replace('&nbsp;', ' ') for it in ordered])
             page_lines.append({'top': top, 'line_h': line_h, 'base_left': base_left, 'line_width': line_width, 'font_size': font_size, 'text': html.unescape(line_text)})
         overlays = []
-        def detect_chapter_start(lines_meta, page_w, page_h, keywords=None):
-            """
-            كشف بداية فصل/باب بناءً على الكلمات المفتاحية أو حجم الخط والتموضع.
-            """
-            if keywords is None:
-                keywords = CHAPTER_KEYWORDS
+        def detect_chapter_start(lines_meta, page_w, page_h):
+            keywords = ['الفصل', 'فصل', 'باب', 'مقدمة', 'chapter', 'chapter.']
             best = None
             for lm in lines_meta:
                 txt = lm['text'].strip().lower()
-                # تحقق من وجود كلمة مفتاحية في بداية أو وسط السطر
+                # تحقق من وجود كلمة مفتاحية
                 for kw in keywords:
                     if kw in txt:
                         return True, lm['text']
                 # شرط عنوان كبير ومتوسط التمركز أعلى الصفحة
-                if lm['font_size'] >= max(28, int(page_h * 0.025)) and lm['top'] < page_h * 0.40:
+                if lm['font_size'] >= max(36, int(page_h * 0.035)) and lm['top'] < page_h * 0.25:
+                    # تحقّق من أن السطر مركز تقريباً
                     center_x = lm['base_left'] + lm['line_width'] / 2
-                    if abs(center_x - page_w / 2) < page_w * 0.25:
+                    if abs(center_x - page_w / 2) < page_w * 0.18:
                         return True, lm['text']
+                # احتفظ بأكبر عنوان مرشح
                 if best is None or lm['font_size'] > best['font_size']:
                     best = lm
-            # كحالة أخيرة: إذا كان أكبر سطر في أعلى 40% من الصفحة وبحجم كبير نسبياً
-            if best and best['top'] < page_h * 0.40 and best['font_size'] > max(28, int(page_h * 0.025)):
+            # كحالة أخيرة: إذا كان أكبر سطر في أعلى 20% من الصفحة وبحجم كبير نسبياً
+            if best and best['top'] < page_h * 0.20 and best['font_size'] > max(30, int(page_h * 0.03)):
                 return True, best['text']
             return False, ''
         try:
@@ -184,21 +182,24 @@ def convert_pdf_to_html(pdf_path, out_dir, poppler_path=None, tesseract_cmd=None
                     overlays.append(thtml.replace('style="', 'style="z-index:3; pointer-events:none; '))
         except Exception:
             pass
+        extra_style = ""
         try:
             # كشف بداية فصل/باب إذا وُجد
             try:
                 is_chap, chap_title = detect_chapter_start(page_lines, w, h)
+                print(f"[كشف فصل] الصفحة {p}: is_chap={is_chap}, chap_title={chap_title}")
                 if is_chap:
+                    extra_style = "border: 8px solid #ffd700; box-sizing: border-box;"
                     badge_style = (
                         'position:absolute; right:18px; top:18px; '
                         'background:#fff8b0; color:#222; padding:8px 18px; '
                         'z-index:10; border-radius:6px; font-size:18px; font-weight:bold; box-shadow:0 1px 6px #ccc;'
                     )
                     overlays.append(f'<div style="{badge_style}">بداية فصل: {html.escape(chap_title)}</div>')
-            except Exception:
-                pass
-        except Exception:
-            pass
+            except Exception as e:
+                print(f"[كشف فصل] خطأ: {e}")
+        except Exception as e:
+            print(f"[كشف فصل] خطأ عام: {e}")
         try:
             nontext = find_nontext_regions(proc_img, text_boxes, min_area=1500)
             for idx, (x,y,w2,h2) in enumerate(nontext):
@@ -218,7 +219,7 @@ def convert_pdf_to_html(pdf_path, out_dir, poppler_path=None, tesseract_cmd=None
             pass
         img_opacity = 0.0 if any_text else 1.0
         img_tag = f'<img src="images/{img_name}" style="position:absolute; left:0; top:0; width:{w}px; height:{h}px; opacity:{img_opacity}; z-index:1; pointer-events:none;">'
-        html_content = f"""<!doctype html>\n<html lang=\"ar\">\n<head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>صفحة {p}</title></head>\n<body style=\"margin:0;padding:0;\">\n<div style=\"position:relative; width:{w}px; height:{h}px;\">\n{img_tag}\n{''.join(overlays)}\n{''.join(spans)}\n</div>\n</body>\n</html>"""
+        html_content = f"""<!doctype html>\n<html lang=\"ar\">\n<head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>صفحة {p}</title></head>\n<body style=\"margin:0;padding:0;\">\n<div style=\"position:relative; width:{w}px; height:{h}px; {extra_style}\">\n{img_tag}\n{''.join(overlays)}\n{''.join(spans)}\n</div>\n</body>\n</html>"""
         out_html = os.path.join(out_dir, f"page-{p}.html")
         with open(out_html, "w", encoding="utf-8") as f:
             f.write(html_content)
@@ -371,3 +372,24 @@ def extract_table_html_from_region(pil_page, region_bbox, lang=LANGS):
     style = f'position:absolute; left:{x0}px; top:{y0}px; width:{w0}px; height:{h0}px; overflow:auto;'
     return f'<div style="{style}">{table_html}</div>'
 
+if __name__ == "__main__":
+    # إعداد استقبال المعاملات من سطر الأوامر (CLI)
+    parser = argparse.ArgumentParser(description="Convert PDF to HTML wrapper")
+    parser.add_argument("--pdf_path", default=PDF_PATH, help="Path to the PDF file")
+    parser.add_argument("--out_dir", default=OUT_DIR, help="Output directory")
+    parser.add_argument("--start", type=int, default=1, help="Start page number")
+    parser.add_argument("--end", type=int, default=None, help="End page number")
+
+    args = parser.parse_args()
+
+    convert_pdf_to_html(
+        pdf_path=args.pdf_path,
+        out_dir=args.out_dir,
+        poppler_path=POPPLER_PATH,
+        process_start=args.start,
+        process_end=args.end,
+        dpi=DPI,
+        langs=LANGS,
+        min_conf=MIN_CONF,
+        enable_table_detection=ENABLE_TABLE_DETECTION
+    )
