@@ -106,11 +106,13 @@ app.post('/convert', upload.single('pdf'), (req, res) => {
         args.push('--end', endPage.toString());
     }
 
-    console.log(`Starting Python script: py ${args.join(' ')}`);
+    // تحديد أمر بايثون بناءً على نظام التشغيل (py للويندوز، python3 للينكس/ماك)
+    const pythonCmd = process.platform === "win32" ? "py" : "python3";
+    console.log(`Starting Python script: ${pythonCmd} ${args.join(' ')}`);
 
     // تشغيل عملية بايثون كعملية فرعية (Child Process)
     // نمرر PYTHONIOENCODING لتجنب مشاكل ترميز النصوص العربية في ويندوز
-    const pythonProcess = spawn('py', args, {
+    const pythonProcess = spawn(pythonCmd, args, {
         env: { ...process.env, PYTHONIOENCODING: 'utf-8' }
     });
 

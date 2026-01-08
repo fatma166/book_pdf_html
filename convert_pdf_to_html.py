@@ -9,8 +9,15 @@ import numpy as np
 # ====== تكوين ======
 PDF_PATH = r"c:\test_gemini_ai\book.pdf"          # عدّل هنا
 OUT_DIR = r"c:\test_gemini_ai\output"
-POPPLER_PATH = r"C:\poppler\Library\bin"          # أو None إذا أضفت للـ PATH
-pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
+
+# التحقق من نظام التشغيل لتحديد المسارات
+if sys.platform.startswith('win'):
+    POPPLER_PATH = r"C:\poppler\Library\bin"
+    pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
+else:
+    POPPLER_PATH = None  # في Linux يتم التثبيت في المسار العام
+    # tesseract يكون في المسار العام تلقائياً
+
 DPI = 200
 LANGS = "ara+eng"   # تأكد أن 'ara' مثبتة في tesseract
 MIN_CONF = 30
